@@ -92,7 +92,7 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
                 'label': 'Message Template',
                 'type': 'textarea',
                 'help': 'Set in standard python\'s {}-format convention, available names are: '
-                    '{project_name}, {url}, {title}, {message}, {tag[%your_tag%]}. Undefined tags will be shown as [NA]',
+                        '{project_name}, {url}, {title}, {message}, {tag[%your_tag%]}. Undefined tags will be shown as [NA]',
                 'validators': [],
                 'required': True,
                 'default': '*[Sentry]* {project_name} {tag[level]}: *{title}*\n```{message}```\n{url}'
@@ -101,18 +101,31 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
 
     def build_message(self, group, event):
         the_tags = defaultdict(lambda: '[NA]')
-        the_tags.update({k:v for k, v in event.tags})
-        names = {
-            'title': event.title,
-            'tag': the_tags,
-            'message': event.message,
-            'project_name': group.project.name,
-            'url': group.get_absolute_url(),
-        }
+        the_tags.update({k: v for k, v in event.tags})
 
+        telegram_max_message_length = 4000
         template = self.get_message_template(group.project)
+        message = event.message
+        truncated = False
 
-        text = template.format(**names)
+        while True:
+            names = {
+                'title': event.title[:500],
+                'tag': the_tags,
+                'message': message,
+                'project_name': group.project.name,
+                'url': group.get_absolute_url(),
+            }
+            text = template.format(**names)
+            text_full_size = len(text)
+
+            if truncated or text_full_size <= telegram_max_message_length:
+                break
+            else:
+                truncate_warning = "... (truncated)"
+                truncate_size = (text_full_size - telegram_max_message_length) + len(truncate_warning)
+                message = event.message[:-truncate_size] + truncate_warning
+                truncated = True
 
         return {
             'text': text,
@@ -140,6 +153,8 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
             json=payload,
         )
         self.logger.debug('Response code: %s, content: %s' % (response.status_code, response.content))
+        if response.status_code != 200:
+            raise ConnectionError(response.content)
 
     def notify_users(self, group, event, fail_silently=False, **kwargs):
         self.logger.debug('Received notification for event: %s' % event)
